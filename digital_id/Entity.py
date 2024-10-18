@@ -1,127 +1,111 @@
-import os
-#using hazmat for proof of concept
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.exceptions import InvalidSignature
+from .EntityAbstract import EntityAbstract
+from .ID import ID 
+import os 
 
-class Entity():
+class VoterData():
 
+    data_path = EntityAbstract.data_path
 
-    def __init__(self, pub_key:str, priv_key:str):
+    def __init__(self, data):
+        self.data = data
+    
+    @staticmethod
+    def read_data(fname):
+        # read user data from file 
+        data = {}
+        with open(fname, "r") as f:
+            for line in f:
+                line = line.strip("\n").split(":")
+                data[line[0]] = line[1]
+        d = VoterData(None)
+        d.data = data
+        return d 
+    
+    @staticmethod
+    def load_data(data_fname):
+        data = VoterData.read_data(data_fname)
+        return data
+    
+    def save_data(self, fname):
+        with open(fname, "w") as f:
+            for d in self.data:
+                f.write(f"{d}:{self.data[d]}\n")
 
-        if not os.path.exists(pub_key) and not os.path.exists(priv_key):
-            self.generate_key(pub_key, priv_key)
-        else:
-            self.load_keys(pub_key, priv_key)
+class Entity(EntityAbstract):
+
+    def __init__(self, pub_key=None, priv_key=None, data:VoterData=None, id = None):
+        super().__init__(pub_key, priv_key)
+        self.data = None 
+        self.id = None
+        if data is not None:
+            self.data = data
+        if id is not None:
+            self.id = ID.load_id(id)
+    
+    def get_data(self):
+        return self.data 
+    
+    def get_id(self, gov):
+        self.id = gov.generate_id(self)
+        return self.id
+    
+    def generate_id(self, individual):
+        #verifies identity and signs public key of individual
+
+        #get data from individual
+        data = individual.get_data()
+        if self.verify_data(data):
+            #alternatively could sign pub_key with data for 
+            # identity verification 
+            #this assumes you only want to know if an indidual is a citizen
+            #and not their identity
+            ind_pub_key = individual.get_pub_key()
+            pub_key_bytes = self.get_public_bytes(ind_pub_key)
+            sig = self.sign(pub_key_bytes)
+            ind_id = ID(ind_pub_key, sig)
+            return ind_id
         
-    def sign(self, message):
-        # sign message with key
-        # returns sig
-        if self.priv_key == None:
-            print("No Private Key Loaded")
-            exit(1)
-        signature = self.priv_key.sign(
-            message,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA512()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA512()
-        )
-        return signature
+        return None
 
+    def save_entity(self, path):
+        super().save_entity(path)
+        if self.data:
+            self.data.save_data(path + "/voter.dat") 
+        if self.id:
+            self.id.save_id(path + "/id")
+    
+    def load_entity(self, fname):
+        super().load_entity(fname)
+        if os.path.exists(fname + "/voter.dat"):
+            self.data = VoterData.load_data(fname + "/voter.dat")
+        
+        self.id = ID.load_id(fname + "/id")
+    
+    @staticmethod
+    def load_voter(fname):
+        v = Entity(None, None, None, None)
+        v.load_entity(fname)
+        return v
 
-    def verify(self, message, sig):
-        # verify the digital signature of a message using a key
-        # determines whether or not sig is valid for message 
-        if self.pub_key == None:
-            print("No Pubkey Loaded")
-            exit(1)
-        try:
-            self.pub_key.verify(
-                sig,
-                message,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA512()),
-                    salt_length=padding.PSS.MAX_LENGTH
-                ),
-                hashes.SHA512()
-            )
-        except InvalidSignature:
-            return False
+    def verify_data(self, data):
+        #verifies the accuracy of an individuals data
+        #for proof of concenpt assume data is valid 
         return True
-    
-    def load_keys(self, pub_key, priv_key):
-
-        #load keys from file
-        self.priv_key = self.load_priv_key(priv_key)
-        self.pub_key = self.load_pub_key(pub_key)
-
-    def generate_key(self, pub_key, priv_key):
-
-        if pub_key is None or priv_key is None:
-            print("Please Provide A Filename for public and private key")
-            exit(1)
-
-        self.priv_key = private_key = rsa.generate_private_key(
-            public_exponent=65537,  # Commonly used value for public exponent
-            key_size=4096           # Key size in bits (2048 is a standard size)
-        )
-
-        self.pub_key = self.priv_key.public_key()
-        self.save_priv_key(priv_key, self.priv_key)
-        self.save_pub_key(pub_key, self.pub_key)
-    
-    @staticmethod
-    def save_priv_key(fname, priv_key):
-        # Serialize private key to PEM format (unencrypted)
-        private_bytes = priv_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
-
-        with open(fname, "wb") as f:
-            f.write(private_bytes)
-
-    @staticmethod
-    def get_public_bytes(pub_key):
-        public_bytes = pub_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        return public_bytes
-    
-    @staticmethod 
-    def save_pub_key(fname, pub_key):
-        # Serialize public key to PEM format
-        public_bytes = Entity.get_public_bytes(pub_key)
-
-        with open(fname, "wb") as f:
-            f.write(public_bytes)
-
-    @staticmethod
-    def load_priv_key(fname):
-
-        if fname is None:
-            return None
-        # Load private key from PEM file
-        with open(fname, "rb") as f:
-            priv_key = serialization.load_pem_private_key(
-                f.read(),
-                password=None  # If the key is encrypted, provide the password here
-            )
-        return priv_key
-
-    @staticmethod
-    def load_pub_key(fname):
         
-        if fname is None:
-            return None
-        # Load public key from PEM file
-        with open(fname, "rb") as f:
-            pub_key = serialization.load_pem_public_key(f.read())
-        return pub_key
+    @staticmethod
+    def get_org(path):
+        return Entity(path + "/key.pub", path + "/key.priv", None, None)
 
+def main():
+    path = EntityAbstract.data_path
+    data = VoterData({"name":"ryan", "ssn":"555-55-5555"})
+    ind = Entity(path + "ryan/ryan.pub",path +"ryan/ryan.priv",data,None)
+    gov = Entity.get_org("gov/")
+    gov.save_entity(path + "gov/")
+    ind.get_id(gov)
+    ind.save_entity(path+ "ryan")
+    ind.load_voter(path + "ryan")
+
+if __name__ == "__main__":
+    main()
+        
